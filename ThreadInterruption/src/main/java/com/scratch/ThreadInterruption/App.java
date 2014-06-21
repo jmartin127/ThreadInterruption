@@ -23,9 +23,16 @@ public class App {
   public static void main(String[] args) throws InterruptedException {
     BasicConfigurator.configure();
     final ExecutorService executor = Executors.newFixedThreadPool(5);
-    submitSleepingRunnable(executor, /* shouldInterrupt */true);
+    final int numRecordsToProcess = 10;
+    final long millisecondsBetween = 1000L;
+
+    LOGGER.info("****************** Submitting InterruptableRunnable ******************");
+    submitRunnable(executor, new InterruptableRunnable(numRecordsToProcess, millisecondsBetween));
+
     Thread.sleep(10);
-    submitSleepingRunnable(executor, /* shouldInterrupt */false);
+
+    LOGGER.info("****************** Submitting NonInterruptableRunnable ******************");
+    submitRunnable(executor, new NonInterruptableRunnable(numRecordsToProcess, millisecondsBetween));
 
     LOGGER.info("Shutting down thread pool");
     executor.shutdown();
@@ -35,37 +42,38 @@ public class App {
   }
 
   /**
-   * Submits a runnable to the given executor. If souldInterrupt is true, then 5 seconds after submitting the runnable,
-   * it will cancel it.
+   * Submits a runnable to the given executor and then waits for 5 seconds after submitting the runnable to cancel it.
    *
    * @param executor the thread executor pool
-   * @param shouldInterrupt whether or not the submitted job should be canceled after 5 seconds
    * @throws InterruptedException if the parent thread is interrupted while waiting to interrupt the runnable
    */
-  private static void submitSleepingRunnable(final ExecutorService executor, boolean shouldInterrupt)
+  private static void submitRunnable(final ExecutorService executor, final Runnable runnable)
       throws InterruptedException {
-    LOGGER.info("******************* Kicking off a new sleeping runnable ************************");
-    LOGGER.info("Should interrupt? " + shouldInterrupt);
-    LOGGER.info("Creating runnable");
-    final Runnable runnable = new SleepingRunnable();
-    LOGGER.info("Submitting runnable");
+
     Future<?> future = executor.submit(runnable);
 
-    if (shouldInterrupt) {
-      LOGGER.info("I am going to interrupt your sleep in 5 seconds...");
-      Thread.sleep(5000L);
-      LOGGER.info("Interrupting now");
-      future.cancel(true);
-    }
+    LOGGER.info("I am going to interrupt your sleep in 5 seconds...");
+    Thread.sleep(5000L);
+    LOGGER.info("Interrupting now");
+    future.cancel(/* mayInterruptIfRunning */true);
   }
 
   /**
-   * Simple runnable which attempts to sleep for 30 seconds. However, if it is interrupted, then it stops sleeping and
-   * gracefully completes.
+   * Simple runnable which attempts to process 10 records, with a 1 second wait in between each record. However, if it
+   * is interrupted, then it stops sleeping and gracefully completes.
    */
-  private static class SleepingRunnable implements Runnable {
+  private static class InterruptableRunnable implements Runnable {
 
-    private static Logger LOGGER = Logger.getLogger(SleepingRunnable.class);
+    private static Logger LOGGER = Logger.getLogger(InterruptableRunnable.class);
+
+    private final int numToProcess;
+
+    private final long sleepDuration;
+
+    public InterruptableRunnable(final int numToProcess, final long sleepDuration) {
+      this.numToProcess = numToProcess;
+      this.sleepDuration = sleepDuration;
+    }
 
     /*
      * (non-Javadoc)
@@ -73,21 +81,64 @@ public class App {
      */
     public void run() {
       LOGGER.info(String.format("I am running, my name is: %s", Thread.currentThread().getName()));
-      try {
-        sleep(30000L);
-      }
-      catch (InterruptedException e) {
-        LOGGER.info("I have been interrupted from my sleep, so I need to stop sleeping.");
-        Thread.currentThread().interrupt(); // reset the interrupt flag so callers can use it
-        return; // don't do anything else since I have been interrupted
+      for (int i = 0; i < numToProcess; i++) {
+        LOGGER.info(String.format("Processing record at index %d", i));
+        try {
+          sleep(sleepDuration);
+        }
+        catch (InterruptedException e) {
+          LOGGER.info("I have been interrupted from my sleep, so I need to stop processing records.");
+          Thread.currentThread().interrupt(); // reset the interrupt flag so callers can use it
+          return; // don't do anything else since I have been interrupted
+        }
       }
       LOGGER.info("I completed my sleep without interruptions.");
     }
 
-    private void sleep(final long milliSecondsToSleep) throws InterruptedException {
-      LOGGER.info(String.format("I am going to try to sleep for %d milliseconds.", milliSecondsToSleep));
-      Thread.sleep(milliSecondsToSleep);
-      LOGGER.info("Done sleeping.");
+    private void sleep(final long millisecondsToSleep) throws InterruptedException {
+      Thread.sleep(millisecondsToSleep);
+    }
+
+  }
+
+  /**
+   * Runnable which cannot be easily interrupted, since it does not handle the InterruptedException properly.
+   */
+  private static class NonInterruptableRunnable implements Runnable {
+
+    private static Logger LOGGER = Logger.getLogger(NonInterruptableRunnable.class);
+
+    private final int numToProcess;
+
+    private final long sleepDuration;
+
+    public NonInterruptableRunnable(final int numToProcess, final long sleepDuration) {
+      this.numToProcess = numToProcess;
+      this.sleepDuration = sleepDuration;
+    }
+
+    /*
+     * (non-Javadoc)
+     * @see java.lang.Runnable#run()
+     */
+    public void run() {
+      LOGGER.info(String.format("I am running, my name is: %s", Thread.currentThread().getName()));
+      for (int i = 0; i < numToProcess; i++) {
+        LOGGER.info(String.format("Processing record at index %d", i));
+        sleep(sleepDuration);
+      }
+      LOGGER.info("I completed my sleep without interruptions.");
+    }
+
+    private void sleep(final long millisecondsToSleep) {
+      try {
+        Thread.sleep(millisecondsToSleep);
+      }
+      catch (InterruptedException e) {
+        LOGGER.info("Calling interrupt on the current thread.");
+        Thread.currentThread().interrupt(); // this alone won't stop the thread, it will only set the interrupted flag
+                                            // on the thread
+      }
     }
 
   }
